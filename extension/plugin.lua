@@ -28,9 +28,8 @@ function init(plugin)
         title="Open Layer Presets...",
         group="layer_new",
         onclick=function()
-            plugin.preferences["count"] = 1
             local executable = app.fs.joinPath(app.fs.userConfigPath, "extensions", "layer-presets", "layer-presets.lua")
-            dofile(executable)(plugin.preferences)
+            loadfile(executable)(plugin.preferences)
         end
     }
 end
