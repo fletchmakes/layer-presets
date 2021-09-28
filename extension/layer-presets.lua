@@ -22,6 +22,9 @@
 
 -- grab the user preferences object that floats in from plugin.lua
 local prefs = ...
+if (prefs == nil) then
+    prefs = {}
+end
 if (prefs.presets == nil) then
     prefs.presets = { { name="Create New...", layers={} } }
 end
@@ -128,6 +131,17 @@ local function getListOfPresets(presets)
     return p, map
 end
 
+-- helper method to prevent name collisions
+local function doesPresetNameExist(check, presets_list)
+    for _, p in pairs(presets_list) do
+        if (check == p) then
+            return true
+        end
+    end
+
+    return false
+end
+
 -- main logic
 local function insertPreset(preset, above)
     -- if they select the "default" selection, don't do anything.
@@ -210,32 +224,8 @@ local function editLayerWindow(cur_layer)
     }
 
     dlg:separator {
-        id="actions"
-    }
-
-    dlg:button {
-        id="delete_layer",
-        label="Remove Layer:",
-        text="DELETE",
-        onclick=function()
-            -- this deletion will be caught by the dialog handler in editPresetWindow()
-            local confirm = create_confirm("Are you sure you'd like to delete this layer?")
-            if (confirm) then
-                dlg:close()
-            end
-        end
-    }
-
-    dlg:separator {
-        id="footer"
-    }
-
-    dlg:button {
-        id="cancel",
-        text="Cancel",
-        onclick=function ()
-            dlg:close()
-        end
+        id="footer",
+        text="Finalize"
     }
 
     dlg:button {
@@ -250,14 +240,14 @@ local function editLayerWindow(cur_layer)
 end
 
 -- build and execute logic for the edit window
-local function editPresetWindow(preset, exit_action)
+local function editPresetWindow(preset, exit_action, presets_list)
     local dlg = Dialog("Edit Layer Preset")
 
     -- save current state and refresh window
     local function refresh(dlg)
         preset.name = dlg.data.preset_name
         dlg:close()
-        editPresetWindow(preset, exit_action):show{ wait=true }
+        editPresetWindow(preset, exit_action, presets_list):show{ wait=true }
     end
 
     dlg:entry {
@@ -282,14 +272,23 @@ local function editPresetWindow(preset, exit_action)
                         blue = edit.data.layer_color.blue,
                         alpha = edit.data.layer_color.alpha
                     }
-                -- remove the layer data
-                elseif (edit.data.delete_layer) then
-                    table.remove(preset.layers, idx)
                 end
 
                 -- refresh the dialog
                 refresh(dlg)
             end -- onclick
+        }
+
+        dlg:button {
+            id=idx.."delete",
+            text="Delete Layer",
+            onclick=function ()
+                local confirm = create_confirm("Are you sure that you'd like to delete this layer?")
+                if (confirm) then
+                    table.remove(preset.layers, idx)
+                    refresh(dlg)
+                end
+            end
         }
 
         dlg:newrow()
@@ -300,22 +299,14 @@ local function editPresetWindow(preset, exit_action)
         text="Add Layer to Preset",
         onclick=function()
             -- insert and refresh the dialog
-            table.insert(preset.layers, { name = "NEW LAYER", mode = "Normal", opacity = 255, color = { red = 0, green = 0, blue = 0, alpha = 255 } })
+            table.insert(preset.layers, { name = "NEW LAYER", mode = "Normal", opacity = 255, color = { red = 0, green = 0, blue = 0, alpha = 0 } })
             refresh(dlg)
         end -- onclick
     }
 
     dlg:separator {
-        id="footer"
-    }
-
-    dlg:button {
-        id="cancel",
-        text="Cancel",
-        onclick=function ()
-            exit_action.action = "cancel"
-            dlg:close()
-        end
+        id="footer",
+        text="Finalize"
     }
 
     dlg:button {
@@ -323,6 +314,10 @@ local function editPresetWindow(preset, exit_action)
         text="Confirm",
         onclick=function()
             preset.name = dlg.data.preset_name
+            if (doesPresetNameExist(preset.name, presets_list)) then
+                create_error("That preset name is already in use. Please use a different preset name.", dlg, 0)
+                return
+            end
             exit_action.action = "confirm"
             dlg:close()
         end
@@ -371,37 +366,35 @@ local function mainWindow(presets)
         text="Add New Preset",
         onclick=function()
             local exit_action = { action = nil }
-            local presets_copy = deepcopy(presets)
             if (dlg.data.sel_preset == "Create New...") then
                 -- create a new blank preset so the dialog is populated
                 local new_preset = {name = "NEW PRESET", layers = {}}
-                editPresetWindow(new_preset, exit_action):show{ wait=true }
+                editPresetWindow(new_preset, exit_action, presets_list):show{ wait=true }
                 if (exit_action.action == "confirm") then
+                    -- add to the preset list
                     table.insert(presets, new_preset)
                     refresh(dlg)
-                elseif (exit_action.action == nil or exit_action.action == "cancel") then
-                    -- do nothing
                 end
             else
                 -- load from memory
-                editPresetWindow(presets_copy[map[dlg.data.sel_preset]], exit_action):show{ wait=true }
+                local presets_copy = deepcopy(presets)
+                editPresetWindow(presets_copy[map[dlg.data.sel_preset]], exit_action, presets_list):show{ wait=true }
                 if (exit_action.action == "confirm") then
-                    presets = deepcopy(presets_copy)
+                    local idx = map[dlg.data.sel_preset]
+                    -- out with the old, in with the new
+                    table.remove(presets, idx)
+                    table.insert(presets, idx, deepcopy(presets_copy[idx]))
                     refresh(dlg)
-                elseif (exit_action.action == nil or exit_action.action == "cancel") then
-                    -- do nothing
                 end
             end
         end
     }
 
     dlg:button {
-        id="remove_preset",
-        text="Remove Selected Preset",
+        id="delete_preset",
+        text="Delete Selected Preset",
         onclick=function()
-            if (dlg.data.sel_preset == "Create New...") then
-                -- do nothing
-            else
+            if (dlg.data.sel_preset ~= "Create New...") then
                 -- delete the preset and reload the window
                 table.remove(presets, map[dlg.data.sel_preset])
                 refresh(dlg)
@@ -411,20 +404,13 @@ local function mainWindow(presets)
 
     -- footer
     dlg:separator {
-        id="footer"
-    }
-
-    dlg:button {
-        id="cancel",
-        text="Cancel",
-        onclick=function ()
-            dlg:close()
-        end
+        id="footer",
+        text="Add to Current Sprite"
     }
 
     dlg:button {
         id="add_below",
-        text="Add Preset Below Layers",
+        text="Below All Layers",
         onclick=function ()
             if (presets[map[dlg.data.sel_preset]].name == "Create New...") then return end
 
@@ -435,7 +421,7 @@ local function mainWindow(presets)
 
     dlg:button {
         id="add_above",
-        text="Add Preset Above Layers",
+        text="Above All Layers",
         onclick=function ()
             if (presets[map[dlg.data.sel_preset]].name == "Create New...") then return end
 
