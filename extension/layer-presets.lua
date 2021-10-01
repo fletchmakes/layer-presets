@@ -119,7 +119,7 @@ local function convertStringToBlendMode(str)
     end
 end
 
--- main window helper logic
+-- returns a list of preset names (p) and a list of indexes by name (map)
 local function getListOfPresets(presets)
     local p = {}
     local map = {}
@@ -129,6 +129,15 @@ local function getListOfPresets(presets)
     end
 
     return p, map
+end
+
+-- returns a numeric list ranging from 1,N
+local function getNumericList(N)
+    local list = {}
+    for i=1, N do
+        list[i] = i
+    end
+    return list
 end
 
 -- helper method to prevent name collisions
@@ -186,8 +195,13 @@ local function insertPreset(preset, above)
 end
 
 -- edit window helper logic
-local function editLayerWindow(cur_layer)
+local function editLayerWindow(cur_layer, edit_action)
     local dlg = Dialog("Editing Layer")
+
+    local function refresh(dlg)
+        dlg:close()
+        editLayerWindow(cur_layer, edit_action):show{ wait=true }
+    end
 
     dlg:entry {
         id="layer_name",
@@ -206,7 +220,11 @@ local function editLayerWindow(cur_layer)
                     "Overlay", "Soft Light", "Hard Light",
                     "Difference", "Exclusion", "Subtract", "Divide",
                     "Hue", "Saturation", "Color", "Luminosity"
-                }
+                },
+        onchange=function ()
+            cur_layer.mode = dlg.data.layer_mode
+            refresh(dlg)
+        end
     }
 
     dlg:slider {
@@ -231,7 +249,59 @@ local function editLayerWindow(cur_layer)
     dlg:button {
         id="save",
         text="Save",
+        focus=true,
         onclick=function()
+            if (dlg.data.layer_name == "") then
+                create_error("Please provide a name for this layer.", dlg, 0)
+                return
+            end
+            edit_action.action = "save"
+            dlg:close()
+        end
+    }
+
+    return dlg
+end
+
+-- reorder layers window
+local function reorderLayersWindow(preset, exit_action)
+    local dlg = Dialog("Reorder Layers")
+
+    -- refresh window
+    local function refresh(dlg)
+        dlg:close()
+        reorderLayersWindow(preset, exit_action):show{ wait=true }
+    end
+
+    for idx, layer in pairs(preset.layers) do
+        dlg:combobox {
+            id=tostring(idx),
+            label=idx.." | "..layer.name,
+            option=tostring(idx),
+            options=getNumericList(#preset.layers),
+            onchange=function ()
+                -- if we observe a change in our current layer number
+                if (dlg.data[tostring(idx)] ~= idx) then
+                    local copy = deepcopy(preset.layers[idx])
+                    table.remove(preset.layers, idx)
+                    table.insert(preset.layers, dlg.data[tostring(idx)], copy)
+                    refresh(dlg)
+                end
+            end
+        }
+    end
+
+    dlg:separator {
+        id="footer",
+        text="Finalize"
+    }
+
+    dlg:button {
+        id="confirm",
+        text="Save",
+        focus=true,
+        onclick=function()
+            exit_action.action = "save"
             dlg:close()
         end
     }
@@ -240,14 +310,14 @@ local function editLayerWindow(cur_layer)
 end
 
 -- build and execute logic for the edit window
-local function editPresetWindow(preset, exit_action, presets_list)
+local function editPresetWindow(preset, exit_action, presets_list, old_name)
     local dlg = Dialog("Edit Layer Preset")
 
     -- save current state and refresh window
     local function refresh(dlg)
         preset.name = dlg.data.preset_name
         dlg:close()
-        editPresetWindow(preset, exit_action, presets_list):show{ wait=true }
+        editPresetWindow(preset, exit_action, presets_list, old_name):show{ wait=true }
     end
 
     dlg:entry {
@@ -257,12 +327,13 @@ local function editPresetWindow(preset, exit_action, presets_list)
 
     for idx, layer in pairs(preset.layers) do
         dlg:button {
-            id=idx.."_layer",
+            id=idx.."layer",
             text=layer.name.." | "..layer.mode.." | "..layer.opacity.." | "..convertColorToHex(layer.color),
             onclick=function ()
-                local edit = editLayerWindow(layer):show{ wait=true }
+                local exit = { action = nil }
+                local edit = editLayerWindow(layer, exit):show{ wait=true }
                 -- save the layer data
-                if (edit.data.save) then
+                if (exit.action == "save") then
                     preset.layers[idx].name = edit.data.layer_name
                     preset.layers[idx].mode = edit.data.layer_mode
                     preset.layers[idx].opacity = edit.data.layer_opacity
@@ -294,14 +365,38 @@ local function editPresetWindow(preset, exit_action, presets_list)
         dlg:newrow()
     end
 
+    dlg:separator {
+        id="actions",
+        text="Modify Preset"
+    }
+
     dlg:button {
         id="add_row",
         text="Add Layer to Preset",
         onclick=function()
             -- insert and refresh the dialog
-            table.insert(preset.layers, { name = "NEW LAYER", mode = "Normal", opacity = 255, color = { red = 0, green = 0, blue = 0, alpha = 0 } })
-            refresh(dlg)
+            if (#preset.layers < 15) then
+                table.insert(preset.layers, { name = "NEW LAYER", mode = "Normal", opacity = 255, color = { red = 0, green = 0, blue = 0, alpha = 0 } })
+                refresh(dlg)
+            else
+                create_error("Sorry, you've reached the max layer count of 15. Please delete some layers before continuing.", dlg, 0)
+                return
+            end
         end -- onclick
+    }
+
+    dlg:button {
+        id="reorder",
+        text="Re-order Layers",
+        onclick=function()
+            local copy = deepcopy(preset)
+            local exit = { action = nil }
+            reorderLayersWindow(copy, exit):show{ wait=true }
+            if (exit.action == "save") then
+                preset.layers = deepcopy(copy).layers
+                refresh(dlg)
+            end
+        end
     }
 
     dlg:separator {
@@ -311,10 +406,16 @@ local function editPresetWindow(preset, exit_action, presets_list)
 
     dlg:button {
         id="confirm",
-        text="Confirm",
+        text="Save Preset",
+        focus=true,
         onclick=function()
             preset.name = dlg.data.preset_name
-            if (doesPresetNameExist(preset.name, presets_list)) then
+            -- if old_name is nil, then we are creating a new preset
+            if ((old_name == nil) and doesPresetNameExist(preset.name, presets_list)) then
+                create_error("That preset name is already in use. Please use a different preset name.", dlg, 0)
+                return
+            -- if old_name has a value, we need to make sure that we either keep the same name, or change to a non-collision name
+            elseif (old_name ~= nil) and (preset.name ~= old_name) and (doesPresetNameExist(preset.name, presets_list)) then
                 create_error("That preset name is already in use. Please use a different preset name.", dlg, 0)
                 return
             end
@@ -349,10 +450,52 @@ local function mainWindow(presets)
                     id="edit_preset",
                     text="Add New Preset"
                 }
+
+                -- hide contextual buttons
+                dlg:modify {
+                    id="delete_preset",
+                    enabled=false
+                }
+
+                dlg:modify {
+                    id="dup_preset",
+                    enabled=false
+                }
+
+                dlg:modify {
+                    id="add_below",
+                    enabled=false
+                }
+
+                dlg:modify {
+                    id="add_above",
+                    enabled=false
+                }
             else
                 dlg:modify {
                     id="edit_preset",
                     text="Edit Preset"
+                }
+
+                -- show contextual buttons
+                dlg:modify {
+                    id="delete_preset",
+                    enabled=true
+                }
+
+                dlg:modify {
+                    id="dup_preset",
+                    enabled=true
+                }
+
+                dlg:modify {
+                    id="add_below",
+                    enabled=true
+                }
+
+                dlg:modify {
+                    id="add_above",
+                    enabled=true
                 }
             end
         end
@@ -368,8 +511,8 @@ local function mainWindow(presets)
             local exit_action = { action = nil }
             if (dlg.data.sel_preset == "Create New...") then
                 -- create a new blank preset so the dialog is populated
-                local new_preset = {name = "NEW PRESET", layers = {}}
-                editPresetWindow(new_preset, exit_action, presets_list):show{ wait=true }
+                local new_preset = { name = "NEW PRESET", layers = { { name = "NEW LAYER", mode = "Normal", opacity = 255, color = { red = 0, green = 0, blue = 0, alpha = 0 } } } }
+                editPresetWindow(new_preset, exit_action, presets_list, nil):show{ wait=true }
                 if (exit_action.action == "confirm") then
                     -- add to the preset list
                     table.insert(presets, new_preset)
@@ -378,7 +521,7 @@ local function mainWindow(presets)
             else
                 -- load from memory
                 local presets_copy = deepcopy(presets)
-                editPresetWindow(presets_copy[map[dlg.data.sel_preset]], exit_action, presets_list):show{ wait=true }
+                editPresetWindow(presets_copy[map[dlg.data.sel_preset]], exit_action, presets_list, dlg.data.sel_preset):show{ wait=true }
                 if (exit_action.action == "confirm") then
                     local idx = map[dlg.data.sel_preset]
                     -- out with the old, in with the new
@@ -391,8 +534,28 @@ local function mainWindow(presets)
     }
 
     dlg:button {
+        id="dup_preset",
+        text="Duplicate Preset",
+        enabled=false,
+        onclick=function()
+            local exit_action = { action = nil }
+            local presets_copy = deepcopy(presets)
+            local sel_preset = presets_copy[map[dlg.data.sel_preset]]
+            -- pass in nil for old_name since this is a new preset
+            sel_preset.name = sel_preset.name.." Copy"
+            editPresetWindow(sel_preset, exit_action, presets_list, nil):show{ wait=true }
+            if (exit_action.action == "confirm") then
+                -- insert without removal to store the duplicatet
+                table.insert(presets, deepcopy(sel_preset))
+                refresh(dlg)
+            end
+        end
+    }
+
+    dlg:button {
         id="delete_preset",
-        text="Delete Selected Preset",
+        text="Delete Preset",
+        enabled=false,
         onclick=function()
             if (dlg.data.sel_preset ~= "Create New...") then
                 -- delete the preset and reload the window
@@ -411,6 +574,7 @@ local function mainWindow(presets)
     dlg:button {
         id="add_below",
         text="Below All Layers",
+        enabled=false,
         onclick=function ()
             if (presets[map[dlg.data.sel_preset]].name == "Create New...") then return end
 
@@ -422,6 +586,7 @@ local function mainWindow(presets)
     dlg:button {
         id="add_above",
         text="Above All Layers",
+        enabled=false,
         onclick=function ()
             if (presets[map[dlg.data.sel_preset]].name == "Create New...") then return end
 
