@@ -1,5 +1,5 @@
 # Layer Presets
-![hero image](./assets/hero.png)
+![hero image](https://media.giphy.com/media/1WxqxVuAt4tU0dVexa/giphy.gif)
 
 An Aseprite extension that allows you to create and save your own layer presets to be loaded into your projects!
 
