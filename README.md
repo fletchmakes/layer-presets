@@ -30,7 +30,7 @@ I'm glad you asked! You can:
 
 ## Credits
 
-This extension was commissioned by [@qamaart](https://twitter.com/qamaart) on Twitter.
+This extension was commissioned by [@qamaart](https://twitter.com/qamaart) on Twitter. He also created the banner image at the top of this page! He's an incredible artist and I highly recommend you follow his work.
 
 As an advocate of open-source software, feel free to suggest edits, or just fork this repository and make your own! The license on this software is open for commercial and private use. This extension will remain free forever; however, if you'd like to buy me a coffee, you can do so here: 
 
